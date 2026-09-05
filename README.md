@@ -1,35 +1,35 @@
-# RNN Dự Đoán Từ Tiếp Theo (Next-Word Prediction)
+# RNN Next-Word Prediction
 
-Bài tập vận dụng xây dựng một mô hình **RNN Language Model** đơn giản bằng PyTorch để dự đoán từ tiếp theo trong câu, sử dụng một đoạn văn bản tiếng Việt (không dấu) về chủ đề **nước và vòng tuần hoàn nước**.
+A hands-on exercise building a simple **RNN Language Model** in PyTorch to predict the next word in a sentence, using a short Vietnamese (unaccented) text about **water and the water cycle**.
 
-## Mục lục
+## Table of Contents
 
-- [Tổng quan](#tổng-quan)
-- [Yêu cầu môi trường](#yêu-cầu-môi-trường)
-- [Cấu trúc notebook](#cấu-trúc-notebook)
-- [Chi tiết kỹ thuật](#chi-tiết-kỹ-thuật)
-  - [Tiền xử lý văn bản](#1-tiền-xử-lý-văn-bản)
-  - [Tạo dữ liệu huấn luyện (Teacher Forcing)](#2-tạo-dữ-liệu-huấn-luyện-teacher-forcing)
-  - [Kiến trúc mô hình](#3-kiến-trúc-mô-hình)
+- [Overview](#overview)
+- [Requirements](#requirements)
+- [Notebook Structure](#notebook-structure)
+- [Technical Details](#technical-details)
+  - [Text Preprocessing](#1-text-preprocessing)
+  - [Building Training Data (Teacher Forcing)](#2-building-training-data-teacher-forcing)
+  - [Model Architecture](#3-model-architecture)
   - [Weight Tying](#4-weight-tying)
-  - [Huấn luyện](#5-huấn-luyện)
-  - [Suy luận / Sinh văn bản](#6-suy-luận--sinh-văn-bản)
-- [Kết quả](#kết-quả)
-- [Cách chạy](#cách-chạy)
-- [Hạn chế và hướng mở rộng](#hạn-chế-và-hướng-mở-rộng)
+  - [Training](#5-training)
+  - [Inference / Text Generation](#6-inference--text-generation)
+- [Results](#results)
+- [How to Run](#how-to-run)
+- [Limitations and Possible Extensions](#limitations-and-possible-extensions)
 
-## Tổng quan
+## Overview
 
-Notebook `RNN_next_words.ipynb` minh họa toàn bộ pipeline của một mô hình ngôn ngữ (language model) ở mức từ (word-level), gồm các bước:
+The `RNN_next_words.ipynb` notebook walks through the full pipeline of a word-level language model, covering:
 
-1. Tiền xử lý văn bản: xây dựng từ điển và chuyển từ thành số.
-2. Xây dựng mô hình gồm `nn.Embedding`, `nn.RNN`, `nn.Linear`.
-3. Áp dụng **Weight Tying** — dùng chung trọng số giữa `Embedding` và `Linear`.
-4. Huấn luyện mô hình bằng `CrossEntropyLoss` và `Adam`.
-5. Áp dụng **Teacher Forcing** khi tạo dữ liệu huấn luyện.
-6. Dự đoán từ tiếp theo và sinh văn bản mới từ mô hình đã huấn luyện.
+1. Text preprocessing: building a vocabulary and mapping words to integers.
+2. Building a model made of `nn.Embedding`, `nn.RNN`, and `nn.Linear`.
+3. Applying **Weight Tying** — sharing weights between the `Embedding` and output `Linear` layers.
+4. Training the model with `CrossEntropyLoss` and `Adam`.
+5. Applying **Teacher Forcing** when constructing the training data.
+6. Predicting the next word and generating new text with the trained model.
 
-## Yêu cầu môi trường
+## Requirements
 
 - Python 3.8+
 - PyTorch (`torch`)
@@ -38,52 +38,52 @@ Notebook `RNN_next_words.ipynb` minh họa toàn bộ pipeline của một mô h
 pip install torch
 ```
 
-Notebook tự động chọn `cuda` nếu có GPU khả dụng, ngược lại sẽ chạy trên `cpu`:
+The notebook automatically picks `cuda` if a GPU is available, otherwise it falls back to `cpu`:
 
 ```python
 thiet_bi = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ```
 
-## Cấu trúc notebook
+## Notebook Structure
 
-| Phần | Nội dung |
+| Section | Content |
 |---|---|
-| 1 | Import thư viện, chọn thiết bị (`cuda`/`cpu`), đặt `torch.manual_seed(42)` |
-| 2 | Định nghĩa văn bản nguồn (chủ đề vòng tuần hoàn nước) |
-| 3 | Tiền xử lý văn bản → xây từ điển `tu_sang_so` / `so_sang_tu` |
-| 4 | Tạo dữ liệu huấn luyện theo kiểu Teacher Forcing, đóng gói vào `DataLoader` |
-| 5 | Định nghĩa mô hình `MoHinhRNN` (Embedding → RNN → Linear, có Weight Tying) |
-| 6 | Vòng lặp huấn luyện với `CrossEntropyLoss` + `Adam` (300 epoch) |
-| 7 | Hàm `du_doan_tu_tiep_theo`: dự đoán 1 từ kế tiếp từ một câu ngữ cảnh |
-| 8 | Hàm `sinh_van_ban`: sinh liên tiếp nhiều từ (autoregressive generation) |
+| 1 | Import libraries, select device (`cuda`/`cpu`), set `torch.manual_seed(42)` |
+| 2 | Define the source text (water cycle topic) |
+| 3 | Text preprocessing → build the `tu_sang_so` / `so_sang_tu` vocabularies |
+| 4 | Build training data using Teacher Forcing, wrap it into a `DataLoader` |
+| 5 | Define the `MoHinhRNN` model (Embedding → RNN → Linear, with Weight Tying) |
+| 6 | Training loop with `CrossEntropyLoss` + `Adam` (300 epochs) |
+| 7 | `du_doan_tu_tiep_theo`: predicts the single next word given a context sentence |
+| 8 | `sinh_van_ban`: generates multiple words in a row (autoregressive generation) |
 
-## Chi tiết kỹ thuật
+## Technical Details
 
-### 1. Tiền xử lý văn bản
+### 1. Text Preprocessing
 
-Hàm `tien_xu_ly_van_ban` chuyển văn bản về chữ thường, loại bỏ ký tự không phải chữ/số bằng regex (`[^a-zA-Z0-9\s]`), rồi tách thành danh sách từ (`split()`).
+The `tien_xu_ly_van_ban` function lowercases the text, strips out any character that isn't a letter or digit using a regex (`[^a-zA-Z0-9\s]`), and splits the result into a list of words (`split()`).
 
-Từ danh sách từ, ta xây hai từ điển ánh xạ hai chiều:
+From that word list, two vocabularies are built:
 
-- `tu_sang_so`: từ → chỉ số (index), dùng để mã hóa đầu vào cho mô hình.
-- `so_sang_tu`: chỉ số → từ, dùng để giải mã đầu ra dự đoán.
+- `tu_sang_so`: word → index, used to encode the model's input.
+- `so_sang_tu`: index → word, used to decode the model's predictions.
 
-Với văn bản mẫu: **127 từ**, kích thước từ điển (số từ duy nhất) là **81**.
+For the sample text: **127 words** total, with a vocabulary of **81 unique words**.
 
-### 2. Tạo dữ liệu huấn luyện (Teacher Forcing)
+### 2. Building Training Data (Teacher Forcing)
 
-Đây là ý tưởng cốt lõi của bài toán "dự đoán từ tiếp theo": với mỗi vị trí trong chuỗi, nhãn (label) chính là chuỗi đầu vào **dịch phải 1 bước**.
+This is the core idea behind next-word prediction: at every position in the sequence, the label is simply the input sequence **shifted right by one position**.
 
 ```text
-Đầu vào : nuoc la mot tai nguyen
-Nhãn    : la mot tai nguyen quan
+Input : nuoc la mot tai nguyen
+Label : la mot tai nguyen quan
 ```
 
-Nghĩa là tại mỗi bước thời gian, mô hình nhận **từ thật hiện tại** làm đầu vào để dự đoán **từ thật kế tiếp** — đây chính là cơ chế Teacher Forcing: trong lúc huấn luyện, mô hình luôn được "mớm" từ đúng của bước trước (ground truth) thay vì dùng từ do chính nó dự đoán, giúp quá trình học ổn định và hội tụ nhanh hơn so với việc tự hồi quy (autoregressive) ngay từ đầu.
+In other words, at every timestep the model receives the **true current word** and is asked to predict the **true next word** — this is exactly what Teacher Forcing means: during training, the model is always fed the ground-truth word from the previous step rather than its own (possibly wrong) prediction, which makes training more stable and lets it converge faster than a fully autoregressive training scheme would.
 
-Hàm `tao_du_lieu_huan_luyen` trượt một cửa sổ có độ dài `do_dai_ngu_canh = 5` qua toàn bộ chuỗi số để sinh ra các cặp `(dau_vao, nhan)`, sau đó đóng gói vào `TensorDataset` và `DataLoader` (`batch_size=4`, `shuffle=True`).
+The `tao_du_lieu_huan_luyen` function slides a window of length `do_dai_ngu_canh = 5` over the entire integer sequence to produce `(dau_vao, nhan)` pairs, which are then wrapped into a `TensorDataset` and `DataLoader` (`batch_size=4`, `shuffle=True`).
 
-### 3. Kiến trúc mô hình
+### 3. Model Architecture
 
 ```python
 class MoHinhRNN(nn.Module):
@@ -101,11 +101,11 @@ class MoHinhRNN(nn.Module):
         return du_doan
 ```
 
-Mô hình gồm 3 thành phần:
+The model has three main components:
 
-1. **`nn.Embedding`** (81 → 64): chuyển mỗi chỉ số từ thành một vector dày đặc (dense vector) 64 chiều, cho phép mô hình học được các mối quan hệ ngữ nghĩa giữa các từ thay vì coi chúng là các ký hiệu rời rạc (one-hot).
-2. **`nn.RNN`** (input 64, hidden 64, `batch_first=True`): xử lý tuần tự các vector embedding theo từng bước thời gian, duy trì một trạng thái ẩn (hidden state) tổng hợp thông tin ngữ cảnh từ các từ trước đó.
-3. **`nn.Linear`** (64 → 81): chiếu đầu ra của RNN tại mỗi bước thời gian về không gian có số chiều bằng kích thước từ điển, tạo ra điểm số (logits) cho từng từ ứng viên.
+1. **`nn.Embedding`** (81 → 64): maps each word index to a dense 64-dimensional vector, letting the model learn semantic relationships between words instead of treating them as isolated symbols (as a one-hot encoding would).
+2. **`nn.RNN`** (input 64, hidden 64, `batch_first=True`): processes the embedding vectors sequentially, one timestep at a time, maintaining a hidden state that summarizes context from all previous words.
+3. **`nn.Linear`** (64 → 81): projects the RNN's output at each timestep into a vector the size of the vocabulary, producing logits (scores) for every candidate word.
 
 ### 4. Weight Tying
 
@@ -113,21 +113,21 @@ Mô hình gồm 3 thành phần:
 self.fc.weight = self.embedding.weight
 ```
 
-Ma trận trọng số của lớp `Embedding` (kích thước `[kich_thuoc_tu_dien, kich_thuoc_embedding]`) và ma trận trọng số của lớp `Linear` đầu ra (kích thước `[kich_thuoc_tu_dien, kich_thuoc_an]`) được **dùng chung** khi `kich_thuoc_embedding == kich_thuoc_an`. Ý tưởng này dựa trên trực giác rằng lớp embedding học cách biểu diễn "một từ trông như thế nào trong không gian vector", còn lớp đầu ra cần học cách "so khớp một vector ẩn với từ nào trong từ điển" — về bản chất đây là hai bài toán đối ngẫu, nên chia sẻ trọng số giúp:
+The weight matrix of the `Embedding` layer (shape `[kich_thuoc_tu_dien, kich_thuoc_embedding]`) is **shared** with the weight matrix of the output `Linear` layer (shape `[kich_thuoc_tu_dien, kich_thuoc_an]`), which is only possible when `kich_thuoc_embedding == kich_thuoc_an`. The intuition is that the embedding layer learns "what a word looks like" in vector space, while the output layer learns to "match a hidden vector back to a word" — these are essentially dual problems, so sharing the weights between them offers a few benefits:
 
-- Giảm đáng kể số lượng tham số cần huấn luyện.
-- Giảm nguy cơ overfitting, đặc biệt hữu ích khi dữ liệu huấn luyện nhỏ (như trong bài này).
-- Cải thiện chất lượng biểu diễn từ vì trọng số được cập nhật từ cả hai luồng gradient (embedding và đầu ra).
+- Significantly fewer trainable parameters.
+- Lower risk of overfitting, which matters a lot here since the training set is tiny.
+- Better word representations overall, since the shared matrix receives gradient updates from both the embedding lookup and the output projection.
 
-Notebook kiểm chứng việc này bằng `mo_hinh.fc.weight is mo_hinh.embedding.weight` → `True`.
+The notebook verifies this by checking `mo_hinh.fc.weight is mo_hinh.embedding.weight` → `True`.
 
-### 5. Huấn luyện
+### 5. Training
 
-- **Hàm mất mát:** `nn.CrossEntropyLoss()` — phù hợp cho bài toán phân loại nhiều lớp (mỗi từ trong từ điển là một lớp).
-- **Bộ tối ưu:** `torch.optim.Adam` với `lr=0.01`.
-- **Số epoch:** 300.
+- **Loss function:** `nn.CrossEntropyLoss()` — well suited to this multi-class classification setup, where each word in the vocabulary is a class.
+- **Optimizer:** `torch.optim.Adam` with `lr=0.01`.
+- **Epochs:** 300.
 
-Vì đầu ra của mô hình có dạng `(batch_size, do_dai_ngu_canh, kich_thuoc_tu_dien)` còn `CrossEntropyLoss` yêu cầu đầu vào 2 chiều `(N, C)` và nhãn 1 chiều `(N,)`, cả `du_doan` và `nhan` đều được `reshape` (trải phẳng) trước khi tính loss:
+Since the model's output has shape `(batch_size, do_dai_ngu_canh, kich_thuoc_tu_dien)` while `CrossEntropyLoss` expects a 2D input `(N, C)` and a 1D label `(N,)`, both `du_doan` and `nhan` are flattened via `reshape` before computing the loss:
 
 ```python
 loss = ham_mat_mat(
@@ -136,14 +136,14 @@ loss = ham_mat_mat(
 )
 ```
 
-### 6. Suy luận / Sinh văn bản
+### 6. Inference / Text Generation
 
-- `du_doan_tu_tiep_theo(mo_hinh, cau_dau_vao)`: tiền xử lý câu đầu vào, chỉ giữ lại tối đa `do_dai_ngu_canh` từ cuối cùng làm ngữ cảnh, đưa qua mô hình ở chế độ `eval()` (không tính gradient), rồi lấy `argmax` tại bước thời gian cuối cùng để chọn từ có xác suất cao nhất.
-- `sinh_van_ban(mo_hinh, cau_bat_dau, so_tu_can_sinh)`: lặp lại việc dự đoán từng từ một, mỗi lần nối từ mới dự đoán được vào câu hiện tại rồi dùng câu đó làm ngữ cảnh cho bước tiếp theo (sinh văn bản kiểu tự hồi quy — autoregressive generation, khác với Teacher Forcing chỉ dùng lúc huấn luyện).
+- `du_doan_tu_tiep_theo(mo_hinh, cau_dau_vao)`: preprocesses the input sentence, keeps only the last `do_dai_ngu_canh` words as context, runs the model in `eval()` mode (no gradient tracking), and takes the `argmax` at the final timestep to pick the highest-scoring word.
+- `sinh_van_ban(mo_hinh, cau_bat_dau, so_tu_can_sinh)`: repeatedly predicts one word at a time, appending each new word to the current sentence and using that updated sentence as context for the next prediction — this is autoregressive generation, as opposed to Teacher Forcing, which is only used during training.
 
-## Kết quả
+## Results
 
-Sau 300 epoch, loss trung bình giảm dần rồi dao động quanh mức thấp (do bộ dữ liệu rất nhỏ nên mô hình gần như học thuộc lòng văn bản):
+After 300 epochs, the average loss decreases and then plateaus at a low level (the model essentially memorizes the tiny training text):
 
 ```
 Epoch  50 | Loss trung bình: 0.2068
@@ -154,38 +154,38 @@ Epoch 250 | Loss trung bình: 0.2142
 Epoch 300 | Loss trung bình: 0.2196
 ```
 
-Ví dụ dự đoán:
+Example prediction:
 
 ```
-Câu đầu vào: nuoc la mot tai
-Từ tiếp theo mô hình dự đoán: nguyen
+Input sentence: nuoc la mot tai
+Predicted next word: nguyen
 ```
 
-Ví dụ sinh văn bản (10 từ, bắt đầu từ "nuoc la mot"):
+Example text generation (10 words, starting from "nuoc la mot"):
 
 ```
 nuoc la mot tai nguyen quan trong doi voi su song tren trai
 ```
 
-## Cách chạy
+## How to Run
 
-1. Clone repo và mở notebook bằng Jupyter hoặc Google Colab:
+1. Clone the repo and open the notebook with Jupyter or Google Colab:
 
    ```bash
    jupyter notebook RNN_next_words.ipynb
    ```
 
-2. Chạy tuần tự từng cell từ trên xuống dưới.
-3. Tùy chỉnh các siêu tham số nếu muốn thử nghiệm:
-   - `do_dai_ngu_canh` (độ dài ngữ cảnh, mặc định 5)
-   - `kich_thuoc_embedding`, `kich_thuoc_an` (mặc định 64)
+2. Run the cells in order from top to bottom.
+3. Feel free to tweak the hyperparameters to experiment:
+   - `do_dai_ngu_canh` (context length, default 5)
+   - `kich_thuoc_embedding`, `kich_thuoc_an` (default 64)
    - `batch_size`, `lr`, `so_epoch`
-4. Thử dự đoán/sinh văn bản với câu đầu vào khác bằng cách gọi `du_doan_tu_tiep_theo(...)` hoặc `sinh_van_ban(...)`.
+4. Try predicting/generating text with different input sentences by calling `du_doan_tu_tiep_theo(...)` or `sinh_van_ban(...)`.
 
-## Hạn chế và hướng mở rộng
+## Limitations and Possible Extensions
 
-- **Bộ dữ liệu rất nhỏ** (127 từ, 81 từ duy nhất) nên mô hình dễ học thuộc lòng (overfit) thay vì tổng quát hóa — phù hợp cho mục đích minh họa, chưa phù hợp cho ứng dụng thực tế.
-- **`nn.RNN` (vanilla RNN)** dễ gặp vấn đề vanishing/exploding gradient với chuỗi dài; có thể thay bằng `nn.LSTM` hoặc `nn.GRU` để cải thiện khả năng ghi nhớ ngữ cảnh xa.
-- Chưa có tập validation/test để đánh giá khả năng tổng quát hóa của mô hình.
-- Chiến lược giải mã hiện tại là **greedy decoding** (`argmax`); có thể thử `temperature sampling`, `top-k`, hoặc `beam search` để sinh văn bản đa dạng hơn.
-- Có thể mở rộng bằng cách huấn luyện trên bộ dữ liệu văn bản lớn hơn, hoặc thay kiến trúc RNN bằng Transformer để so sánh hiệu năng.
+- **The dataset is very small** (127 words, 81 unique) so the model tends to memorize rather than generalize — this is fine for illustrating the concepts, but not suitable for real-world use as is.
+- **`nn.RNN` (vanilla RNN)** is prone to vanishing/exploding gradients on longer sequences; swapping in `nn.LSTM` or `nn.GRU` would improve the model's ability to retain longer-range context.
+- There is no validation/test split to measure how well the model generalizes.
+- The current decoding strategy is **greedy decoding** (`argmax`); techniques like temperature sampling, top-k sampling, or beam search could produce more diverse generated text.
+- The project could be extended by training on a larger corpus, or by replacing the RNN architecture with a Transformer to compare performance.
